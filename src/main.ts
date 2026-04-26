@@ -1,4 +1,4 @@
-import { App, ItemView, Notice, Plugin, TFile, WorkspaceLeaf, getAllTags } from "obsidian";
+import { App, ItemView, Notice, Plugin, TFile, WorkspaceLeaf, getAllTags, setIcon } from "obsidian";
 
 const VIEW_TYPE_INBOX = "obsidian-inbox-view";
 const MAX_EXCERPT_LENGTH = 280;
@@ -196,13 +196,13 @@ class InboxProcessorView extends ItemView {
     content.addClass("inbox-processor-view");
 
     const toolbar = content.createDiv({ cls: "inbox-toolbar" });
-    const refreshButton = toolbar.createEl("button", { text: "Update inbox" });
-    refreshButton.addEventListener("click", () => {
-      void this.refreshInbox();
-    });
+    const refreshButton = toolbar.createEl("button", { text: "Refresh" });
     toolbar.createEl("span", {
       cls: "inbox-count",
       text: `${this.rows.length} note${this.rows.length === 1 ? "" : "s"}`,
+    });
+    refreshButton.addEventListener("click", () => {
+      void this.refreshInbox();
     });
 
     const tagDatalist = content.createEl("datalist", {
@@ -244,7 +244,18 @@ class InboxProcessorView extends ItemView {
       titleEl.addEventListener("click", () => {
         void this.app.workspace.getLeaf(true).openFile(row.file);
       });
-      headerEl.createEl("code", { text: row.file.path });
+
+      const deleteButton = headerEl.createEl("button", {
+        cls: "mod-warning inbox-icon-button",
+      });
+      setIcon(deleteButton, "trash");
+      deleteButton.setAttr("aria-label", "Delete note");
+      deleteButton.setAttr("title", "Delete note");
+      deleteButton.addEventListener("click", () => {
+        void this.deleteNote(row.file);
+      });
+
+      // headerEl.createEl("code", { text: row.file.path });
 
       rowEl.createEl("p", { cls: "inbox-excerpt", text: row.excerpt });
 
@@ -256,7 +267,10 @@ class InboxProcessorView extends ItemView {
         placeholder: "Tags (comma or space separated)",
       });
       tagInput.setAttr("list", this.tagListId);
-      const tagButton = tagGroup.createEl("button", { text: "Save tags" });
+      const tagButton = tagGroup.createEl("button", { cls: "inbox-icon-button" });
+      setIcon(tagButton, "check");
+      tagButton.setAttr("aria-label", "Save tags");
+      tagButton.setAttr("title", "Save tags");
       tagButton.addEventListener("click", () => {
         void this.applyTags(row, tagInput.value);
       });
@@ -273,7 +287,10 @@ class InboxProcessorView extends ItemView {
         placeholder: "Parent note path",
       });
       parentInput.setAttr("list", this.parentListId);
-      const parentButton = parentGroup.createEl("button", { text: "Set parent" });
+      const parentButton = parentGroup.createEl("button", { cls: "inbox-icon-button" });
+      setIcon(parentButton, "check");
+      parentButton.setAttr("aria-label", "Set parent");
+      parentButton.setAttr("title", "Set parent");
       parentButton.addEventListener("click", () => {
         void this.applyParent(row, parentInput.value);
       });
@@ -282,14 +299,6 @@ class InboxProcessorView extends ItemView {
           event.preventDefault();
           void this.applyParent(row, parentInput.value);
         }
-      });
-
-      const deleteButton = controls.createEl("button", {
-        cls: "mod-warning",
-        text: "Delete",
-      });
-      deleteButton.addEventListener("click", () => {
-        void this.deleteNote(row.file);
       });
     }
   }
