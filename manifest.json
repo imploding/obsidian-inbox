@@ -1,0 +1,9 @@
+{
+  "id": "obsidian-inbox-processor",
+  "name": "Inbox Processor",
+  "version": "0.0.1",
+  "minAppVersion": "1.5.0",
+  "description": "Standalone inbox view for processing root-level notes without tags or parent links.",
+  "author": "matt",
+  "isDesktopOnly": false
+}
