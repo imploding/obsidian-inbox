@@ -12,6 +12,11 @@
   gap: 0.75rem;
 }
 
+.inbox-title {
+  font-size: 1.2em;
+  font-weight: 600;
+}
+
 .inbox-count {
   opacity: 0.75;
   font-size: 1em;
@@ -25,7 +30,7 @@
 
 .inbox-row {
   border-radius: 12px;
-  padding: 0.75rem;
+  padding: 1rem 0.75rem 0.75rem;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -43,7 +48,7 @@
   align-items: center;
   gap: 1rem 0.75em;
   flex-wrap: wrap;
-  padding-bottom: 0.75rem;
+  padding-bottom: 1rem;
   border-bottom: 1px solid hsla(0, 0%, 100%, 0.07);
 }
 

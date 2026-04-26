@@ -1,7 +1,34 @@
-import { App, ItemView, Notice, Plugin, TFile, WorkspaceLeaf, getAllTags, setIcon } from "obsidian";
+import {
+  App,
+  ItemView,
+  Notice,
+  Plugin,
+  PluginSettingTab,
+  Setting,
+  TFile,
+  WorkspaceLeaf,
+  getAllTags,
+  setIcon,
+} from "obsidian";
 
 const VIEW_TYPE_INBOX = "obsidian-inbox-view";
-const MAX_EXCERPT_LENGTH = 280;
+const DEFAULT_EXCERPT_LENGTH = 280;
+
+type InboxMatchMode = "missing-tags-or-parent" | "missing-tags-and-parent";
+
+interface InboxProcessorSettings {
+  showExcerpts: boolean;
+  includeSubfolders: boolean;
+  excerptCharacterLimit: number;
+  matchMode: InboxMatchMode;
+}
+
+const DEFAULT_SETTINGS: InboxProcessorSettings = {
+  showExcerpts: true,
+  includeSubfolders: false,
+  excerptCharacterLimit: DEFAULT_EXCERPT_LENGTH,
+  matchMode: "missing-tags-or-parent",
+};
 
 interface InboxRow {
   file: TFile;
@@ -63,22 +90,23 @@ function stripLeadingFrontmatter(raw: string): string {
   return raw.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n?/, "");
 }
 
-function buildExcerpt(raw: string): string {
+function buildExcerpt(raw: string, maxLength: number): string {
+  const limit = Number.isFinite(maxLength) && maxLength > 0 ? Math.floor(maxLength) : DEFAULT_EXCERPT_LENGTH;
   const withoutFrontmatter = stripLeadingFrontmatter(raw).trimStart();
   const source = withoutFrontmatter.replace(/\s+/g, " ").trim();
   if (!source) {
     return "(No content)";
   }
 
-  if (source.length <= MAX_EXCERPT_LENGTH) {
+  if (source.length <= limit) {
     return source;
   }
 
-  return `${source.slice(0, MAX_EXCERPT_LENGTH).trimEnd()}…`;
+  return `${source.slice(0, limit).trimEnd()}…`;
 }
 
 // Query logic intentionally isolated for future reuse (e.g. Bases view integration).
-function getInboxCandidates(app: App): TFile[] {
+function getInboxCandidates(app: App, settings: InboxProcessorSettings): TFile[] {
   return app.vault
     .getMarkdownFiles()
     .filter((file) => {
@@ -86,21 +114,20 @@ function getInboxCandidates(app: App): TFile[] {
         return false;
       }
 
-      if (file.path.includes("/")) {
+      if (!settings.includeSubfolders && file.path.includes("/")) {
         return false;
       }
 
       const cache = app.metadataCache.getFileCache(file);
       const tags = cache ? getAllTags(cache) : null;
-      if (tags && tags.length > 0) {
-        return false;
+      const hasTags = Boolean(tags && tags.length > 0);
+      const hasParent = hasParentValue(cache?.frontmatter?.parent);
+
+      if (settings.matchMode === "missing-tags-and-parent") {
+        return !hasTags && !hasParent;
       }
 
-      if (hasParentValue(cache?.frontmatter?.parent)) {
-        return false;
-      }
-
-      return true;
+      return !hasTags || !hasParent;
     })
     .sort((a, b) => a.path.localeCompare(b.path));
 }
@@ -147,12 +174,14 @@ class InboxProcessorView extends ItemView {
     try {
       this.tagSuggestions = this.collectTagSuggestions();
       this.parentSuggestions = this.collectParentSuggestions();
-      const files = getInboxCandidates(this.app);
+      const files = getInboxCandidates(this.app, this.plugin.settings);
 
       this.rows = await Promise.all(
         files.map(async (file) => ({
           file,
-          excerpt: buildExcerpt(await this.app.vault.cachedRead(file)),
+          excerpt: this.plugin.settings.showExcerpts
+            ? buildExcerpt(await this.app.vault.cachedRead(file), this.plugin.settings.excerptCharacterLimit)
+            : "",
           changed: false,
         })),
       );
@@ -196,11 +225,15 @@ class InboxProcessorView extends ItemView {
     content.addClass("inbox-processor-view");
 
     const toolbar = content.createDiv({ cls: "inbox-toolbar" });
-    const refreshButton = toolbar.createEl("button", { text: "Refresh" });
+
     toolbar.createEl("span", {
-      cls: "inbox-count",
-      text: `${this.rows.length} note${this.rows.length === 1 ? "" : "s"}`,
+      cls: "inbox-title",
+      text: `Inbox (${this.rows.length})`,
     });
+
+    const refreshButton = toolbar.createEl("button");
+    setIcon(refreshButton, "rotate-cw");
+
     refreshButton.addEventListener("click", () => {
       void this.refreshInbox();
     });
@@ -224,7 +257,7 @@ class InboxProcessorView extends ItemView {
     if (this.rows.length === 0) {
       content.createEl("p", {
         cls: "inbox-empty",
-        text: "No root-level inbox notes found.",
+        text: "No inbox notes found.",
       });
       return;
     }
@@ -255,9 +288,9 @@ class InboxProcessorView extends ItemView {
         void this.deleteNote(row.file);
       });
 
-      // headerEl.createEl("code", { text: row.file.path });
-
-      rowEl.createEl("p", { cls: "inbox-excerpt", text: row.excerpt });
+      if (this.plugin.settings.showExcerpts) {
+        rowEl.createEl("p", { cls: "inbox-excerpt", text: row.excerpt });
+      }
 
       const controls = rowEl.createDiv({ cls: "inbox-controls" });
 
@@ -400,8 +433,82 @@ class InboxProcessorView extends ItemView {
   }
 }
 
+class InboxProcessorSettingTab extends PluginSettingTab {
+  constructor(
+    app: App,
+    private readonly plugin: InboxProcessorPlugin,
+  ) {
+    super(app, plugin);
+  }
+
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
+
+    containerEl.createEl("h2", { text: "Inbox Processor" });
+
+    new Setting(containerEl)
+      .setName("Show note excerpts")
+      .setDesc("Display a short preview")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.showExcerpts).onChange(async (value) => {
+          this.plugin.settings.showExcerpts = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Excerpt character limit")
+      .setDesc("Maximum number of characters shown in each note preview.")
+      .addText((text) => {
+        text.setValue(String(this.plugin.settings.excerptCharacterLimit));
+        text.inputEl.type = "number";
+        text.inputEl.min = "1";
+        text.onChange(async (value) => {
+          const parsed = Number.parseInt(value, 10);
+          if (!Number.isFinite(parsed) || parsed < 1) {
+            return;
+          }
+
+          this.plugin.settings.excerptCharacterLimit = parsed;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Include notes in subfolders")
+      .setDesc("When enabled, inbox matching includes notes from all folders.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.includeSubfolders).onChange(async (value) => {
+          this.plugin.settings.includeSubfolders = value;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Inbox matching mode")
+      .setDesc("Control whether notes are matched by missing tags or missing parent metadata.")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("missing-tags-or-parent", "No tags OR no parent")
+          .addOption("missing-tags-and-parent", "No tags AND no parent")
+          .setValue(this.plugin.settings.matchMode)
+          .onChange(async (value) => {
+            if (value === "missing-tags-or-parent" || value === "missing-tags-and-parent") {
+              this.plugin.settings.matchMode = value;
+              await this.plugin.saveSettings();
+            }
+          }),
+      );
+  }
+}
+
 export default class InboxProcessorPlugin extends Plugin {
+  settings: InboxProcessorSettings = DEFAULT_SETTINGS;
+
   async onload(): Promise<void> {
+    await this.loadSettings();
+
     this.registerView(VIEW_TYPE_INBOX, (leaf) => new InboxProcessorView(leaf, this));
 
     this.addRibbonIcon("inbox", "Open inbox processor", () => {
@@ -415,10 +522,48 @@ export default class InboxProcessorPlugin extends Plugin {
         void this.activateView();
       },
     });
+
+    this.addSettingTab(new InboxProcessorSettingTab(this.app, this));
   }
 
   onunload(): void {
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_INBOX);
+  }
+
+  async loadSettings(): Promise<void> {
+    const saved = (await this.loadData()) as Partial<InboxProcessorSettings> | null;
+    this.settings = {
+      ...DEFAULT_SETTINGS,
+      ...saved,
+    };
+
+    if (
+      this.settings.matchMode !== "missing-tags-or-parent" &&
+      this.settings.matchMode !== "missing-tags-and-parent"
+    ) {
+      this.settings.matchMode = DEFAULT_SETTINGS.matchMode;
+    }
+
+    if (!Number.isFinite(this.settings.excerptCharacterLimit) || this.settings.excerptCharacterLimit < 1) {
+      this.settings.excerptCharacterLimit = DEFAULT_SETTINGS.excerptCharacterLimit;
+    } else {
+      this.settings.excerptCharacterLimit = Math.floor(this.settings.excerptCharacterLimit);
+    }
+  }
+
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings);
+    await this.refreshInboxViews();
+  }
+
+  private async refreshInboxViews(): Promise<void> {
+    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_INBOX);
+    for (const leaf of leaves) {
+      const view = leaf.view;
+      if (view instanceof InboxProcessorView) {
+        await view.refreshInbox();
+      }
+    }
   }
 
   private async activateView(): Promise<void> {
